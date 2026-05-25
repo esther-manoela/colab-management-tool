@@ -35,3 +35,15 @@ Table `colaboradores`: `id` (PK), `nome` (required), `val_passaporte`, `tel_pess
 ### UI language
 
 All UI text and field names are in Brazilian Portuguese.
+
+## GitHub repository
+
+Repository: https://github.com/esther-manoela/colab-management-tool
+
+`colaboradores.db` is in `.gitignore` — the database (which contains personal data) is never committed.
+
+## Auto-sync to GitHub
+
+A Claude Code **Stop hook** (`.claude/sync.ps1`) runs automatically after every Claude Code response. It stages all changes, commits with a timestamp (`Auto-sync: YYYY-MM-DD HH:MM`), and pushes to `origin/master` — but only if there are actual file changes. No action is taken on empty responses.
+
+The hook is configured in `.claude/settings.local.json`. To disable it temporarily, remove or comment out the `hooks.Stop` block in that file.

@@ -1,0 +1,20 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(python main.py)"
+    ]
+  },
+  "hooks": {
+    "Stop": [
+      {
+        "matcher": "",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "powershell -NoProfile -ExecutionPolicy Bypass -File \"D:\\Esther\\Claude Code\\Colab. Management Tool\\.claude\\sync.ps1\""
+          }
+        ]
+      }
+    ]
+  }
+}
