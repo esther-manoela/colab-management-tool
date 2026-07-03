@@ -1,7 +1,7 @@
 import sqlite3
 import tkinter as tk
 from pathlib import Path
-from tkinter import ttk, messagebox
+from tkinter import ttk, messagebox, simpledialog
 
 DB_PATH = Path(__file__).parent / "colaboradores.db"
 
@@ -14,8 +14,7 @@ FIELDS = [
     ("Telefone do contato de emergencia:", "tel_emergencia"),
 ]
 
-SKILL_COLS = ("Nome", "C#", "C++", "WinUI", "Python")
-SKILL_KEYS = ("csharp", "cpp", "winui", "python")
+DEFAULT_SKILLS = ["C#", "C++", "WinUI", "Python"]
 
 
 def _init_db() -> sqlite3.Connection:
@@ -33,15 +32,32 @@ def _init_db() -> sqlite3.Connection:
         )
     """)
     conn.execute("""
-        CREATE TABLE IF NOT EXISTS skills (
-            colaborador_id INTEGER PRIMARY KEY,
-            csharp  INTEGER DEFAULT 0,
-            cpp     INTEGER DEFAULT 0,
-            winui   INTEGER DEFAULT 0,
-            python  INTEGER DEFAULT 0,
-            FOREIGN KEY (colaborador_id) REFERENCES colaboradores(id) ON DELETE CASCADE
+        CREATE TABLE IF NOT EXISTS skill_types (
+            id   INTEGER PRIMARY KEY AUTOINCREMENT,
+            nome TEXT NOT NULL UNIQUE
         )
     """)
+    # Migrate old column-based skills table to junction table
+    old_cols = {row[1] for row in conn.execute("PRAGMA table_info(skills)").fetchall()}
+    if "csharp" in old_cols:
+        conn.execute("DROP TABLE skills")
+        old_cols = set()
+    if not old_cols:
+        conn.execute("""
+            CREATE TABLE skills (
+                colaborador_id INTEGER,
+                skill_id       INTEGER,
+                PRIMARY KEY (colaborador_id, skill_id),
+                FOREIGN KEY (colaborador_id) REFERENCES colaboradores(id) ON DELETE CASCADE,
+                FOREIGN KEY (skill_id) REFERENCES skill_types(id) ON DELETE CASCADE
+            )
+        """)
+    # Seed default skills on first run
+    if not conn.execute("SELECT 1 FROM skill_types LIMIT 1").fetchone():
+        conn.executemany(
+            "INSERT INTO skill_types (nome) VALUES (?)",
+            [(s,) for s in DEFAULT_SKILLS],
+        )
     conn.commit()
     return conn
 
@@ -126,6 +142,109 @@ class AdicionarColaboradorWindow(tk.Toplevel):
         self.geometry(f"+{px - w // 2}+{py - h // 2}")
 
 
+class GerenciarSkillsWindow(tk.Toplevel):
+    def __init__(self, parent):
+        super().__init__(parent)
+        self.title("Gerenciar Skills")
+        self.geometry("360x420")
+        self.resizable(False, False)
+        self.grab_set()
+        self._build_ui()
+        self._carregar()
+        self._center(parent)
+
+    def _build_ui(self):
+        outer = ttk.Frame(self, padding=16)
+        outer.pack(fill="both", expand=True)
+
+        ttk.Label(outer, text="Skills cadastradas", font=("Segoe UI", 10, "bold")).pack(anchor="w", pady=(0, 10))
+
+        container = ttk.Frame(outer, relief="solid", borderwidth=1)
+        container.pack(fill="both", expand=True)
+
+        canvas = tk.Canvas(container, highlightthickness=0)
+        vsb = ttk.Scrollbar(container, orient="vertical", command=canvas.yview)
+        canvas.configure(yscrollcommand=vsb.set)
+
+        self._rows_frame = ttk.Frame(canvas)
+        canvas_win = canvas.create_window((0, 0), window=self._rows_frame, anchor="nw")
+
+        self._rows_frame.bind(
+            "<Configure>",
+            lambda _: canvas.configure(scrollregion=canvas.bbox("all")),
+        )
+        canvas.bind(
+            "<Configure>",
+            lambda e: canvas.itemconfig(canvas_win, width=e.width),
+        )
+
+        canvas.pack(side="left", fill="both", expand=True)
+        vsb.pack(side="right", fill="y")
+
+        btn_frame = ttk.Frame(outer)
+        btn_frame.pack(fill="x", pady=(12, 0))
+        ttk.Button(btn_frame, text="+ Adicionar skill", command=self._adicionar).pack(side="left")
+        ttk.Button(btn_frame, text="Fechar", command=self.destroy).pack(side="right")
+
+    def _carregar(self):
+        for widget in self._rows_frame.winfo_children():
+            widget.destroy()
+
+        skills = self.master.conn.execute(
+            "SELECT id, nome FROM skill_types ORDER BY nome"
+        ).fetchall()
+
+        if not skills:
+            ttk.Label(
+                self._rows_frame, text="Nenhuma skill cadastrada.", foreground="gray"
+            ).pack(anchor="w", padx=8, pady=8)
+            return
+
+        for skill in skills:
+            row = ttk.Frame(self._rows_frame)
+            row.pack(fill="x", padx=4, pady=2)
+            ttk.Label(row, text=skill["nome"], font=("Segoe UI", 10)).pack(
+                side="left", padx=(4, 0), pady=6
+            )
+            ttk.Button(
+                row, text="Remover",
+                command=lambda sid=skill["id"], sn=skill["nome"]: self._remover(sid, sn),
+            ).pack(side="right", padx=4)
+
+    def _adicionar(self):
+        nome = simpledialog.askstring("Adicionar skill", "Nome da nova skill:", parent=self)
+        if not nome or not nome.strip():
+            return
+        nome = nome.strip()
+        try:
+            self.master.conn.execute("INSERT INTO skill_types (nome) VALUES (?)", (nome,))
+            self.master.conn.commit()
+        except sqlite3.IntegrityError:
+            messagebox.showwarning("Skill duplicada", f"A skill '{nome}' ja existe.", parent=self)
+            return
+        self._carregar()
+        self.master._atualizar_skills_view()
+
+    def _remover(self, skill_id, nome):
+        if not messagebox.askyesno(
+            "Confirmar remocao",
+            f"Deseja remover a skill '{nome}'?\nEla sera removida de todos os colaboradores.",
+            parent=self,
+        ):
+            return
+        self.master.conn.execute("DELETE FROM skill_types WHERE id = ?", (skill_id,))
+        self.master.conn.commit()
+        self._carregar()
+        self.master._atualizar_skills_view()
+
+    def _center(self, parent):
+        self.update_idletasks()
+        px = parent.winfo_x() + parent.winfo_width() // 2
+        py = parent.winfo_y() + parent.winfo_height() // 2
+        w, h = self.winfo_width(), self.winfo_height()
+        self.geometry(f"+{px - w // 2}+{py - h // 2}")
+
+
 class App(tk.Tk):
     def __init__(self):
         super().__init__()
@@ -135,6 +254,8 @@ class App(tk.Tk):
 
         self.conn = _init_db()
         self.colaboradores = []
+        self._skill_types = []
+        self.skills_tree = None
         self._build_ui()
         self._carregar_colaboradores()
         self.protocol("WM_DELETE_WINDOW", self._on_close)
@@ -201,7 +322,10 @@ class App(tk.Tk):
         self._skills_menu_aberto = False
         self._submenu_skills_frame = tk.Frame(sidebar, bg="#243342")
 
-        tk.Button(self._submenu_skills_frame, text="  Gerenciar Skills", command=self._show_skills_view, **sub_cfg).pack(fill="x")
+        tk.Button(
+            self._submenu_skills_frame, text="  Gerenciar Skills",
+            command=self._abrir_gerenciar_skills, **sub_cfg,
+        ).pack(fill="x")
 
         self._skills_btn = tk.Button(
             sidebar, text="⊞  Skills",
@@ -246,27 +370,16 @@ class App(tk.Tk):
 
         ttk.Label(self._view_skills, text="Skills dos Colaboradores", font=("Segoe UI", 11, "bold")).pack(anchor="w", pady=(0, 8))
 
-        skills_tree_frame = ttk.Frame(self._view_skills)
-        skills_tree_frame.pack(fill="both", expand=True)
+        self._skills_tree_container = ttk.Frame(self._view_skills)
+        self._skills_tree_container.pack(fill="both", expand=True)
+        self._skills_tree_container.rowconfigure(0, weight=1)
+        self._skills_tree_container.columnconfigure(0, weight=1)
 
-        self.skills_tree = ttk.Treeview(skills_tree_frame, columns=SKILL_COLS, show="headings", selectmode="browse")
-        skill_col_widths = [200, 80, 80, 80, 80]
-        for col, w in zip(SKILL_COLS, skill_col_widths):
-            self.skills_tree.heading(col, text=col)
-            self.skills_tree.column(col, width=w, minwidth=60, anchor="center")
-        self.skills_tree.column("Nome", anchor="w")
-
-        vsb2 = ttk.Scrollbar(skills_tree_frame, orient="vertical", command=self.skills_tree.yview)
-        self.skills_tree.configure(yscrollcommand=vsb2.set)
-
-        self.skills_tree.grid(row=0, column=0, sticky="nsew")
-        vsb2.grid(row=0, column=1, sticky="ns")
-        skills_tree_frame.rowconfigure(0, weight=1)
-        skills_tree_frame.columnconfigure(0, weight=1)
-
-        self.skills_tree.bind("<ButtonRelease-1>", self._toggle_skill)
-
-        ttk.Label(self._view_skills, text="Clique em uma celula para marcar/desmarcar a skill.", foreground="gray").pack(anchor="w", pady=(8, 0))
+        ttk.Label(
+            self._view_skills,
+            text="Clique em uma celula para marcar/desmarcar a skill.",
+            foreground="gray",
+        ).pack(anchor="w", pady=(8, 0))
 
     def _toggle_menu(self):
         self._show_colaboradores_view()
@@ -288,6 +401,9 @@ class App(tk.Tk):
             self._skills_btn.config(text="⊞  Skills  ▲")
         self._skills_menu_aberto = not self._skills_menu_aberto
 
+    def _abrir_gerenciar_skills(self):
+        GerenciarSkillsWindow(self)
+
     def _show_colaboradores_view(self):
         self._view_skills.pack_forget()
         self._view_colaboradores.pack(fill="both", expand=True)
@@ -295,42 +411,82 @@ class App(tk.Tk):
     def _show_skills_view(self):
         self._view_colaboradores.pack_forget()
         self._view_skills.pack(fill="both", expand=True)
+        self._rebuild_skills_tree()
+
+    def _rebuild_skills_tree(self):
+        for widget in self._skills_tree_container.winfo_children():
+            widget.destroy()
+
+        self._skill_types = self.conn.execute(
+            "SELECT id, nome FROM skill_types ORDER BY id"
+        ).fetchall()
+
+        skill_names = [row["nome"] for row in self._skill_types]
+        all_cols = ("Nome",) + tuple(skill_names)
+
+        self.skills_tree = ttk.Treeview(
+            self._skills_tree_container, columns=all_cols, show="headings", selectmode="browse"
+        )
+        self.skills_tree.heading("Nome", text="Nome")
+        self.skills_tree.column("Nome", width=200, minwidth=100, anchor="w")
+        for nome in skill_names:
+            self.skills_tree.heading(nome, text=nome)
+            self.skills_tree.column(nome, width=80, minwidth=60, anchor="center")
+
+        vsb = ttk.Scrollbar(self._skills_tree_container, orient="vertical", command=self.skills_tree.yview)
+        self.skills_tree.configure(yscrollcommand=vsb.set)
+
+        self.skills_tree.grid(row=0, column=0, sticky="nsew")
+        vsb.grid(row=0, column=1, sticky="ns")
+
+        self.skills_tree.bind("<ButtonRelease-1>", self._toggle_skill)
         self._carregar_skills()
 
     def _carregar_skills(self):
         self.skills_tree.delete(*self.skills_tree.get_children())
-        existing = {
-            row["colaborador_id"]: dict(row)
-            for row in self.conn.execute("SELECT * FROM skills").fetchall()
-        }
+        marked = {}
+        for row in self.conn.execute("SELECT colaborador_id, skill_id FROM skills").fetchall():
+            marked.setdefault(row["colaborador_id"], set()).add(row["skill_id"])
         for c in self.colaboradores:
             cid = c["id"]
-            s = existing.get(cid, {k: 0 for k in SKILL_KEYS})
-            values = (c["nome"],) + tuple("✓" if s.get(k, 0) else "✗" for k in SKILL_KEYS)
+            collab_marked = marked.get(cid, set())
+            values = (c["nome"],) + tuple(
+                "✓" if row["id"] in collab_marked else "✗"
+                for row in self._skill_types
+            )
             self.skills_tree.insert("", "end", iid=str(cid), values=values)
+
+    def _atualizar_skills_view(self):
+        if self._view_skills.winfo_ismapped():
+            self._rebuild_skills_tree()
 
     def _toggle_skill(self, event):
         region = self.skills_tree.identify_region(event.x, event.y)
         if region != "cell":
             return
         col_id = self.skills_tree.identify_column(event.x)
-        col_index = int(col_id[1:]) - 1  # #1=0, #2=1, ...
+        col_index = int(col_id[1:]) - 1
         if col_index == 0:
             return
         item = self.skills_tree.identify_row(event.y)
         if not item:
             return
-        skill_key = SKILL_KEYS[col_index - 1]
+        skill_id = self._skill_types[col_index - 1]["id"]
         collab_id = int(item)
         current_values = list(self.skills_tree.item(item, "values"))
-        new_val = 0 if current_values[col_index] == "✓" else 1
-        self.conn.execute(
-            f"INSERT INTO skills (colaborador_id, {skill_key}) VALUES (?, ?) "
-            f"ON CONFLICT(colaborador_id) DO UPDATE SET {skill_key}=excluded.{skill_key}",
-            (collab_id, new_val),
-        )
+        is_marked = current_values[col_index] == "✓"
+        if is_marked:
+            self.conn.execute(
+                "DELETE FROM skills WHERE colaborador_id=? AND skill_id=?",
+                (collab_id, skill_id),
+            )
+        else:
+            self.conn.execute(
+                "INSERT OR IGNORE INTO skills (colaborador_id, skill_id) VALUES (?, ?)",
+                (collab_id, skill_id),
+            )
         self.conn.commit()
-        current_values[col_index] = "✓" if new_val else "✗"
+        current_values[col_index] = "✗" if is_marked else "✓"
         self.skills_tree.item(item, values=current_values)
 
     def _exibir_dados(self):
