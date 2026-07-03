@@ -14,10 +14,14 @@ FIELDS = [
     ("Telefone do contato de emergencia:", "tel_emergencia"),
 ]
 
+SKILL_COLS = ("Nome", "C#", "C++", "WinUI", "Python")
+SKILL_KEYS = ("csharp", "cpp", "winui", "python")
+
 
 def _init_db() -> sqlite3.Connection:
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
+    conn.execute("PRAGMA foreign_keys = ON")
     conn.execute("""
         CREATE TABLE IF NOT EXISTS colaboradores (
             id               INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -26,6 +30,16 @@ def _init_db() -> sqlite3.Connection:
             tel_pessoal      TEXT DEFAULT '',
             contato_emergencia TEXT DEFAULT '',
             tel_emergencia   TEXT DEFAULT ''
+        )
+    """)
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS skills (
+            colaborador_id INTEGER PRIMARY KEY,
+            csharp  INTEGER DEFAULT 0,
+            cpp     INTEGER DEFAULT 0,
+            winui   INTEGER DEFAULT 0,
+            python  INTEGER DEFAULT 0,
+            FOREIGN KEY (colaborador_id) REFERENCES colaboradores(id) ON DELETE CASCADE
         )
     """)
     conn.commit()
@@ -184,13 +198,22 @@ class App(tk.Tk):
         )
         self._hamburger_btn.pack(fill="x")
 
-        # Content area
-        content = ttk.Frame(main_frame, padding=16)
-        content.pack(side="left", fill="both", expand=True)
+        tk.Button(
+            sidebar, text="⊞  Skills",
+            command=self._show_skills_view, **btn_cfg,
+        ).pack(fill="x")
 
-        ttk.Label(content, text="Colaboradores cadastrados", font=("Segoe UI", 11, "bold")).pack(anchor="w", pady=(0, 8))
+        # Content area — two frames, only one visible at a time
+        self._content_wrapper = ttk.Frame(main_frame)
+        self._content_wrapper.pack(side="left", fill="both", expand=True)
 
-        tree_frame = ttk.Frame(content)
+        # --- Colaboradores view ---
+        self._view_colaboradores = ttk.Frame(self._content_wrapper, padding=16)
+        self._view_colaboradores.pack(fill="both", expand=True)
+
+        ttk.Label(self._view_colaboradores, text="Colaboradores cadastrados", font=("Segoe UI", 11, "bold")).pack(anchor="w", pady=(0, 8))
+
+        tree_frame = ttk.Frame(self._view_colaboradores)
         tree_frame.pack(fill="both", expand=True)
 
         self.tree = ttk.Treeview(tree_frame, columns=COLS, show="headings", selectmode="browse")
@@ -210,9 +233,37 @@ class App(tk.Tk):
         tree_frame.columnconfigure(0, weight=1)
 
         self.status_var = tk.StringVar(value="Nenhum colaborador cadastrado.")
-        ttk.Label(content, textvariable=self.status_var, foreground="gray").pack(anchor="w", pady=(8, 0))
+        ttk.Label(self._view_colaboradores, textvariable=self.status_var, foreground="gray").pack(anchor="w", pady=(8, 0))
+
+        # --- Skills view ---
+        self._view_skills = ttk.Frame(self._content_wrapper, padding=16)
+
+        ttk.Label(self._view_skills, text="Skills dos Colaboradores", font=("Segoe UI", 11, "bold")).pack(anchor="w", pady=(0, 8))
+
+        skills_tree_frame = ttk.Frame(self._view_skills)
+        skills_tree_frame.pack(fill="both", expand=True)
+
+        self.skills_tree = ttk.Treeview(skills_tree_frame, columns=SKILL_COLS, show="headings", selectmode="browse")
+        skill_col_widths = [200, 80, 80, 80, 80]
+        for col, w in zip(SKILL_COLS, skill_col_widths):
+            self.skills_tree.heading(col, text=col)
+            self.skills_tree.column(col, width=w, minwidth=60, anchor="center")
+        self.skills_tree.column("Nome", anchor="w")
+
+        vsb2 = ttk.Scrollbar(skills_tree_frame, orient="vertical", command=self.skills_tree.yview)
+        self.skills_tree.configure(yscrollcommand=vsb2.set)
+
+        self.skills_tree.grid(row=0, column=0, sticky="nsew")
+        vsb2.grid(row=0, column=1, sticky="ns")
+        skills_tree_frame.rowconfigure(0, weight=1)
+        skills_tree_frame.columnconfigure(0, weight=1)
+
+        self.skills_tree.bind("<ButtonRelease-1>", self._toggle_skill)
+
+        ttk.Label(self._view_skills, text="Clique em uma celula para marcar/desmarcar a skill.", foreground="gray").pack(anchor="w", pady=(8, 0))
 
     def _toggle_menu(self):
+        self._show_colaboradores_view()
         if self._menu_aberto:
             self._submenu_frame.pack_forget()
             self._hamburger_btn.config(text="☰  Dados pessoais")
@@ -220,6 +271,51 @@ class App(tk.Tk):
             self._submenu_frame.pack(fill="x", after=self._hamburger_btn)
             self._hamburger_btn.config(text="☰  Dados pessoais  ▲")
         self._menu_aberto = not self._menu_aberto
+
+    def _show_colaboradores_view(self):
+        self._view_skills.pack_forget()
+        self._view_colaboradores.pack(fill="both", expand=True)
+
+    def _show_skills_view(self):
+        self._view_colaboradores.pack_forget()
+        self._view_skills.pack(fill="both", expand=True)
+        self._carregar_skills()
+
+    def _carregar_skills(self):
+        self.skills_tree.delete(*self.skills_tree.get_children())
+        existing = {
+            row["colaborador_id"]: dict(row)
+            for row in self.conn.execute("SELECT * FROM skills").fetchall()
+        }
+        for c in self.colaboradores:
+            cid = c["id"]
+            s = existing.get(cid, {k: 0 for k in SKILL_KEYS})
+            values = (c["nome"],) + tuple("✓" if s.get(k, 0) else "✗" for k in SKILL_KEYS)
+            self.skills_tree.insert("", "end", iid=str(cid), values=values)
+
+    def _toggle_skill(self, event):
+        region = self.skills_tree.identify_region(event.x, event.y)
+        if region != "cell":
+            return
+        col_id = self.skills_tree.identify_column(event.x)
+        col_index = int(col_id[1:]) - 1  # #1=0, #2=1, ...
+        if col_index == 0:
+            return
+        item = self.skills_tree.identify_row(event.y)
+        if not item:
+            return
+        skill_key = SKILL_KEYS[col_index - 1]
+        collab_id = int(item)
+        current_values = list(self.skills_tree.item(item, "values"))
+        new_val = 0 if current_values[col_index] == "✓" else 1
+        self.conn.execute(
+            f"INSERT INTO skills (colaborador_id, {skill_key}) VALUES (?, ?) "
+            f"ON CONFLICT(colaborador_id) DO UPDATE SET {skill_key}=excluded.{skill_key}",
+            (collab_id, new_val),
+        )
+        self.conn.commit()
+        current_values[col_index] = "✓" if new_val else "✗"
+        self.skills_tree.item(item, values=current_values)
 
     def _exibir_dados(self):
         selecionado = self.tree.selection()
