@@ -210,6 +210,10 @@ class GerenciarSkillsWindow(tk.Toplevel):
                 row, text="Remover",
                 command=lambda sid=skill["id"], sn=skill["nome"]: self._remover(sid, sn),
             ).pack(side="right", padx=4)
+            ttk.Button(
+                row, text="Editar",
+                command=lambda sid=skill["id"], sn=skill["nome"]: self._editar(sid, sn),
+            ).pack(side="right")
 
     def _adicionar(self):
         nome = simpledialog.askstring("Adicionar skill", "Nome da nova skill:", parent=self)
@@ -221,6 +225,26 @@ class GerenciarSkillsWindow(tk.Toplevel):
             self.master.conn.commit()
         except sqlite3.IntegrityError:
             messagebox.showwarning("Skill duplicada", f"A skill '{nome}' ja existe.", parent=self)
+            return
+        self._carregar()
+        self.master._atualizar_skills_view()
+
+    def _editar(self, skill_id, nome_atual):
+        novo_nome = simpledialog.askstring(
+            "Editar skill", "Novo nome da skill:", initialvalue=nome_atual, parent=self
+        )
+        if not novo_nome or not novo_nome.strip():
+            return
+        novo_nome = novo_nome.strip()
+        if novo_nome == nome_atual:
+            return
+        try:
+            self.master.conn.execute(
+                "UPDATE skill_types SET nome=? WHERE id=?", (novo_nome, skill_id)
+            )
+            self.master.conn.commit()
+        except sqlite3.IntegrityError:
+            messagebox.showwarning("Skill duplicada", f"A skill '{novo_nome}' ja existe.", parent=self)
             return
         self._carregar()
         self.master._atualizar_skills_view()
