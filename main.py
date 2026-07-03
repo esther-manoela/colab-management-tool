@@ -198,10 +198,16 @@ class App(tk.Tk):
         )
         self._hamburger_btn.pack(fill="x")
 
-        tk.Button(
+        self._skills_menu_aberto = False
+        self._submenu_skills_frame = tk.Frame(sidebar, bg="#243342")
+
+        tk.Button(self._submenu_skills_frame, text="  Gerenciar Skills", command=self._show_skills_view, **sub_cfg).pack(fill="x")
+
+        self._skills_btn = tk.Button(
             sidebar, text="⊞  Skills",
-            command=self._show_skills_view, **btn_cfg,
-        ).pack(fill="x")
+            command=self._toggle_skills_menu, **btn_cfg,
+        )
+        self._skills_btn.pack(fill="x")
 
         # Content area — two frames, only one visible at a time
         self._content_wrapper = ttk.Frame(main_frame)
@@ -271,6 +277,16 @@ class App(tk.Tk):
             self._submenu_frame.pack(fill="x", after=self._hamburger_btn)
             self._hamburger_btn.config(text="☰  Dados pessoais  ▲")
         self._menu_aberto = not self._menu_aberto
+
+    def _toggle_skills_menu(self):
+        self._show_skills_view()
+        if self._skills_menu_aberto:
+            self._submenu_skills_frame.pack_forget()
+            self._skills_btn.config(text="⊞  Skills")
+        else:
+            self._submenu_skills_frame.pack(fill="x", after=self._skills_btn)
+            self._skills_btn.config(text="⊞  Skills  ▲")
+        self._skills_menu_aberto = not self._skills_menu_aberto
 
     def _show_colaboradores_view(self):
         self._view_skills.pack_forget()
